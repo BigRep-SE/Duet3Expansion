@@ -497,8 +497,10 @@ static void ReportFlashError(FirmwareFlashErrorCode err)
 	for (unsigned int i = 0; i < (unsigned int)err; ++i)
 	{
 		Platform::WriteLed(0, true);
+		Platform::WriteLed(1, true);
 		delay(200);
 		Platform::WriteLed(0, false);
+		Platform::WriteLed(1, false);
 		delay(200);
 	}
 

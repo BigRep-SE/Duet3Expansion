@@ -10,7 +10,7 @@
 
 #include <RepRapFirmware.h>
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 
 #if ACCELEROMETER_USES_SPI
 # include <Hardware/SharedSpiDevice.h>
@@ -30,6 +30,7 @@ namespace AccelerometerHandler
 	void Init(SharedI2CMaster& dev) noexcept;
 #endif
 	bool IsPresent() noexcept;
+	bool IsRunning() noexcept; // We need this to disable anything else in the I2C. TODO: Block
 	GCodeResult ProcessConfigRequest(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
 	GCodeResult ProcessStartRequest(const CanMessageStartAccelerometer& msg, const StringRef& reply) noexcept;
 	void Diagnostics(const StringRef& reply) noexcept;

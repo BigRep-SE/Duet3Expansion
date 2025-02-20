@@ -37,7 +37,7 @@
 # endif
 #endif
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 # include "AccelerometerHandler.h"
 #endif
 
@@ -47,6 +47,11 @@
 
 #if SUPPORT_AS5601
 # include "MFMHandler.h"
+#endif
+
+#if HAS_48V_MONITOR
+constexpr float MinV48 = 18.0;
+constexpr float MaxV48 = 50.5;
 #endif
 
 // Check a value against the specified min and max parameters returning true if the value was outside limits
@@ -100,6 +105,28 @@ static GCodeResult GenerateTestReport(const CanMessageGeneric &msg, const String
 #if HAS_12V_MONITOR
 	// Check the 12V rail voltage
 	testFailed |= CheckMinMax(parser, reply, 'W', Platform::GetCurrentV12Voltage(), "12V voltage");
+#endif
+
+#if HAS_48V_MONITOR
+	// TODO: Get 48V max/min from CAN message
+	// Check the 48V rail voltage
+	{
+		const float voltage = Platform::GetCurrentV48Voltage();
+		if (voltage < MinV48)
+		{
+			reply.lcatf("Vmotor voltage reading %.1f is lower than expected", (double)voltage);
+			testFailed = true;
+		}
+		else if (voltage > MaxV48)
+		{
+			reply.lcatf("Vmotor voltage reading %.1f is higher than expected", (double)voltage);
+			testFailed = true;
+		}
+		else
+		{
+			reply.lcatf("Vmotor voltage reading OK (%.1fV)", (double)voltage);
+		}
+	}
 #endif
 
 #if HAS_SMART_DRIVERS
@@ -456,6 +483,13 @@ static GCodeResult GetInfo(const CanMessageReturnInfo& msg, const StringRef& rep
 						(double)v12Voltage.minimum, (double)v12Voltage.current, (double)v12Voltage.maximum);
 		}
 #endif
+#if HAS_48V_MONITOR
+		{
+			const MinCurMax v48Voltage = Platform::GetV48Voltages(false);
+			reply.catf(",\"v48\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}",
+					(double)v48Voltage.minimum, (double)v48Voltage.current, (double)v48Voltage.maximum);
+		}
+#endif
 		reply.cat('}');
 		break;
 
@@ -533,6 +567,12 @@ static GCodeResult GetInfo(const CanMessageReturnInfo& msg, const StringRef& rep
 				reply.lcatf("V12 voltage: min %.1f, current %.1f, max %.1f", (double)v12.minimum, (double)v12.current, (double)v12.maximum);
 			}
 #endif
+#if HAS_48V_MONITOR
+			{
+				const MinCurMax v48 = Platform::GetV48Voltages(true);
+				reply.lcatf("V48 voltage: min %.1f, current %.1f, max %.1f", (double)v48.minimum, (double)v48.current, (double)v48.maximum);
+			}
+#endif
 
 #if HAS_CPU_TEMP_SENSOR
 			const MinCurMax& mcuTemperature = Platform::GetMcuTemperatures();
@@ -588,7 +628,7 @@ static GCodeResult GetInfo(const CanMessageReturnInfo& msg, const StringRef& rep
 #if SUPPORT_CLOSED_LOOP
 		ClosedLoop::Diagnostics(reply);
 #endif
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 		AccelerometerHandler::Diagnostics(reply);
 #endif
 #if SUPPORT_LDC1612
@@ -869,7 +909,7 @@ void CommandProcessor::Spin()
 			break;
 #endif
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 		case CanMessageType::accelerometerConfig:
 			requestId = buf->msg.generic.requestId;
 			rslt = AccelerometerHandler::ProcessConfigRequest(buf->msg.generic, replyRef);

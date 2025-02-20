@@ -52,6 +52,10 @@ private:
 	void Deactivate() noexcept;
 	void DigitalInterrupt() noexcept;
 	void AnalogInterrupt(uint32_t reading) noexcept;
+#if SUPPORT_ANALOG_THRESHOLD
+	static void CommonAnalogFilteredInterrupt(CallbackParameter cbp, uint32_t reading) noexcept;
+	void AnalogFilteredInterrupt(uint32_t reading) noexcept;
+#endif
 	uint32_t GetAnalogValue() const noexcept;
 	GCodeResult SetDriveLevel(uint32_t param, const StringRef& reply, uint8_t& extra) noexcept;
 
@@ -67,6 +71,10 @@ private:
 	bool active;
 	volatile bool state;
 	volatile bool sendDue;
+
+#if SUPPORT_ANALOG_THRESHOLD
+	int adcFilterChannel {-1};
+#endif
 
 	static InputMonitor * volatile monitorsList;
 	static InputMonitor * volatile freeList;

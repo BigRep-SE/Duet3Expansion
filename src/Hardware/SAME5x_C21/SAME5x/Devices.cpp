@@ -18,7 +18,7 @@
 constexpr size_t AnalogInTaskStackWords = 300;
 static Task<AnalogInTaskStackWords> analogInTask;
 
-#if defined(EXP3HC)
+#if defined(EXP3HC) || defined(CB_MP) || defined(CB_SE) || defined(CB_SB)
 
 void SerialPortInit(AsyncSerial*) noexcept
 {

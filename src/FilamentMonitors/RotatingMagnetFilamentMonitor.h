@@ -12,6 +12,11 @@
 
 #if SUPPORT_DRIVERS
 
+#if SUPPORT_FILAMENT_SENSOR
+#include "Heating/Sensors/FilteredSensor.h"
+#include "CanMessageGenericParser.h"
+#endif
+
 class RotatingMagnetFilamentMonitor : public Duet3DFilamentMonitor
 {
 public:
@@ -62,6 +67,7 @@ private:
 	void Init() noexcept;
 	void Reset() noexcept;
 	void HandleIncomingData() noexcept;
+	float GetCurrentPosition() const noexcept;
 	FilamentSensorStatus CheckFilament(float amountCommanded, float amountMeasured, bool overdue) noexcept;
 
 	bool HaveCalibrationData() const noexcept;
@@ -127,6 +133,69 @@ private:
 	};
 	MagneticMonitorState magneticMonitorState;
 };
+
+#if SUPPORT_FILAMENT_SENSOR
+class FilamentSensor : public FilteredSensor
+{
+private:
+	using TimeMs = uint32_t;
+	TimeMs lastPollTimeMs = 0;
+	float scale = 1 ;
+
+	static SensorTypeDescriptor typeDescriptor;
+
+public:
+
+	FilamentSensor(unsigned int sensorNum) : FilteredSensor(sensorNum, "Filament Sensor") { };
+
+	static constexpr const char *TypeName = "filament";
+
+	GCodeResult Configure(const CanMessageGenericParser& parser, const StringRef& reply) override ;
+
+	void Poll() override ;
+};
+
+class FilamentRatioSensor : public FilteredSensor
+{
+private:
+	using TimeMs = uint32_t;
+	TimeMs lastPollTimeMs = 0;
+	float scale = 1 ;
+
+	static SensorTypeDescriptor typeDescriptor;
+
+public:
+
+	FilamentRatioSensor(unsigned int sensorNum) : FilteredSensor(sensorNum, "Filament Ratio Sensor") { };
+
+	static constexpr const char *TypeName = "filaratio";
+
+	GCodeResult Configure(const CanMessageGenericParser& parser, const StringRef& reply) override ;
+
+	void Poll() override ;
+};
+
+class TotalFilamentSensor : public TemperatureSensor
+{
+private:
+	using TimeMs = uint32_t;
+	TimeMs lastPollTimeMs = 0;
+	float scale = 1 ;
+
+	static SensorTypeDescriptor typeDescriptor;
+
+public:
+
+	TotalFilamentSensor(unsigned int sensorNum) : TemperatureSensor(sensorNum, "Total Filament Sensor") { };
+
+	static constexpr const char *TypeName = "totfilam";
+
+	GCodeResult Configure(const CanMessageGenericParser& parser, const StringRef& reply) override ;
+
+	void Poll() override ;
+};
+
+#endif // SUPPORT_FILAMENT_SENSOR
 
 #endif
 

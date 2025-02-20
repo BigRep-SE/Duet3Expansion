@@ -18,6 +18,9 @@ enum class PinAccess : int
 	read,
 	readWithPullup_InternalUseOnly,
 	readAnalog,
+#if SUPPORT_ANALOG_THRESHOLD
+	readAnalogShared,
+#endif
 	write0,
 	write1,
 	pwm,

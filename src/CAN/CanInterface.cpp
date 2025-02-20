@@ -664,8 +664,38 @@ bool CanInterface::SendAnnounce(CanMessageBuffer *buf) noexcept
 	msg->zero = 0;
 	memcpy(msg->uniqueId, Platform::GetUniqueId().GetRaw(), sizeof(msg->uniqueId));
 	// Note, board type name, firmware version, firmware date and firmware time are limited to 43 characters in the new format
+#if SUPPORT_BOOTLOADER_OM
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+	const char *bootloaderVersionText = *reinterpret_cast<const char**>(0x20);		// offset of vectors.pvReservedM8
+#pragma GCC diagnostic pop
+	String<StringLength50> version;
+	if(bootloaderVersionText == nullptr){
+		version.printf("UNKNO");
+	}
+	else{
+		version.printf("%s",bootloaderVersionText);
+		String<StringLength20> toFind;
+		toFind.printf("version ");
+		int pos = version.Contains(toFind.c_str());
+		if(pos < 0){
+			version.printf("UNKNO");
+		}
+		else{
+			version.Erase(0, pos + toFind.strlen());
+		}
+	}
+	// We use vertical-bar to separate the three fields: board type, firmware version, date, Bootloader version
+	// (!) There is no check!
+	SafeSnprintf(msg->boardTypeAndFirmwareVersion, ARRAY_SIZE(msg->boardTypeAndFirmwareVersion), "%s|%s|%s|%s",
+			BOARD_TYPE_NAME,
+			VERSION,
+			IsoDate,
+			version.c_str());
+#else
 	// We use vertical-bar to separate the three fields: board type, firmware version, date/time
 	SafeSnprintf(msg->boardTypeAndFirmwareVersion, ARRAY_SIZE(msg->boardTypeAndFirmwareVersion), "%s|%s|%s%.6s", BOARD_TYPE_NAME, VERSION, IsoDate, TIME_SUFFIX);
+#endif
 	buf->dataLength = msg->GetActualDataLength();
 	Send(buf);
 	Platform::OnProcessingCanMessage();								// flash the ACT LED

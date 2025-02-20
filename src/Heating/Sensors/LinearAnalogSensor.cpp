@@ -9,6 +9,7 @@
 
 #include <Platform/Platform.h>
 #include <CanMessageGenericParser.h>
+#include "CommandProcessing/AdcStreamHandler.h"
 
 // ADC resolution
 // For the theory behind ADC oversampling, see http://www.atmel.com/Images/doc8003.pdf
@@ -68,6 +69,12 @@ GCodeResult LinearAnalogSensor::Configure(const CanMessageGenericParser& parser,
 				reply.copy("filtering not supported on this port");
 				return GCodeResult::warning;
 			}
+		}
+#endif
+#if SUPPORT_ADCSTREAM
+		if (adcFilterChannel >= 0)
+		{
+			AdcStreamHandler::Init(adcFilterChannel);  // The last ADC will be the streamer!
 		}
 #endif
 	}

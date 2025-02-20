@@ -30,7 +30,7 @@
 
 static inline Move& GetMoveInstance() noexcept { return reprap.GetMove(); }
 
-#elif defined(EXP3HC) || defined(EXP1HCL) || defined(M23CL)
+#elif defined(EXP3HC) || defined(EXP1HCL) || defined(M23CL) || defined(CB_MP) || defined(CB_SE) || defined(CB_SB)
 
 static inline Move& GetMoveInstance() noexcept { return *moveInstance; }
 
@@ -197,7 +197,12 @@ constexpr uint32_t DRVCONF_FILT_ISENSE_SHIFT = 20;
 constexpr uint32_t DRVCONF_FILT_ISENSE_MASK = (3 << 20);	// Filter time constant of sense amplifier to suppress ringing and coupling from second coil operation
 															// 00: low – 100ns 01: – 200ns 10: – 300ns 11: high – 400ns
 															// Hint: Increase setting if motor chopper noise occurs due to cross-coupling of both coils. Reset Default = 0.
+
+#if defined(CB_MP_02)
+constexpr uint32_t DefaultDrvConfReg = (8 << DRVCONF_BBMCLKS_SHIFT) | (2 << DRVCONF_OTSELECT_SHIFT);
+#else
 constexpr uint32_t DefaultDrvConfReg = (2 << DRVCONF_BBMCLKS_SHIFT) | (2 << DRVCONF_OTSELECT_SHIFT);
+#endif
 
 constexpr uint8_t REGNUM_5160_GLOBAL_SCALER = 0x0B;			// Global scaling of Motor current. This value is multiplied to the current scaling in order to adapt a drive to a
 															// certain motor type. This value should be chosen before tuning other settings, because it also influences chopper hysteresis.
@@ -421,6 +426,12 @@ public:
 	void TransferSucceeded(const uint8_t *rcvDataBlock) noexcept;
 	void TransferFailed() noexcept;
 
+#if SUPPORT_TMC_RESULT
+	uint32_t GetMinResultValueAndClear() noexcept;
+	uint32_t GetMaxResultValueAndClear() noexcept;
+	uint32_t GetAvgResultValueAndClear() noexcept;
+#endif
+
 private:
 	bool SetChopConf(uint32_t newVal) noexcept;
 	void UpdateRegister(size_t regIndex, uint32_t regVal) noexcept;
@@ -472,6 +483,13 @@ private:
 
 	uint32_t configuredChopConfReg;							// the configured chopper control register, in the Enabled state, without the microstepping bits
 	uint32_t maxStallStepInterval;							// maximum interval between full steps to take any notice of stall detection
+
+#if SUPPORT_TMC_RESULT
+	volatile uint32_t minSgLoadRegisterSensor = 0x03FF;		// the minimum value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t maxSgLoadRegisterSensor = 0;			// the maximum value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t accumSgLoadRegisterSensor = 0;		// Accum. value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t accumCounterSgLoadRegisterSensor = 0;	// Accum. counter value of the StallGuard bits we read (For the sensor)
+#endif
 
 	std::atomic<uint32_t> newRegistersToUpdate;				// bitmap of register indices whose values need to be sent to the driver chip
 	std::atomic<uint32_t> registersToUpdate;				// bitmap of register indices whose values need to be sent to the driver chip
@@ -1156,6 +1174,21 @@ void TmcDriverState::TransferSucceeded(const uint8_t *rcvDataBlock) noexcept
 					regVal &= ~TMC_RR_OL;								// open load bits are unreliable at standstill, low speeds, and low current
 				}
 			}
+
+#if SUPPORT_TMC_RESULT
+			const uint32_t sgResult = regVal & TMC_RR_SGRESULT;
+			++accumCounterSgLoadRegisterSensor;
+			accumSgLoadRegisterSensor += (uint64_t)sgResult;
+
+			if (sgResult < minSgLoadRegisterSensor)
+			{
+				minSgLoadRegisterSensor = sgResult;
+			}
+			if (sgResult > maxSgLoadRegisterSensor)
+			{
+				maxSgLoadRegisterSensor = sgResult;
+			}
+#endif
 
 			// Only add bits to the accumulator if they appear in 2 successive samples. This is to avoid seeing transient S2G, S2VS, STST and open load errors.
 			const uint32_t oldDrvStat = readRegisters[ReadDrvStat];
@@ -2068,6 +2101,53 @@ GCodeResult SmartDrivers::SetStallEndstopReporting(uint16_t driverNumber, float 
 		return GCodeResult::ok;
 	}
 }
+
+#if SUPPORT_TMC_RESULT
+
+uint32_t TmcDriverState::GetMinResultValueAndClear() noexcept
+{
+//	TaskCriticalSectionLocker lock;
+	uint32_t ret = minSgLoadRegisterSensor;
+	minSgLoadRegisterSensor = 0x03FF;
+	return ret;
+}
+uint32_t TmcDriverState::GetMaxResultValueAndClear() noexcept
+{
+//	TaskCriticalSectionLocker lock;
+	uint32_t ret = maxSgLoadRegisterSensor;
+	maxSgLoadRegisterSensor = 0;
+	return ret;
+
+}
+uint32_t TmcDriverState::GetAvgResultValueAndClear() noexcept
+{
+	//TaskCriticalSectionLocker lock;
+	if(accumCounterSgLoadRegisterSensor)
+	{
+		uint32_t ret = accumSgLoadRegisterSensor / accumCounterSgLoadRegisterSensor;
+		accumSgLoadRegisterSensor = 0;
+		accumCounterSgLoadRegisterSensor = 0;
+		return ret;
+	}
+	return 0;
+}
+
+uint32_t SmartDrivers::GetMinResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetMinResultValueAndClear();
+}
+
+uint32_t SmartDrivers::GetMaxResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetMaxResultValueAndClear();
+}
+
+uint32_t SmartDrivers::GetAvgResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetAvgResultValueAndClear();
+}
+
+#endif // SUPPORT_TMC_RESULT
 
 #endif
 

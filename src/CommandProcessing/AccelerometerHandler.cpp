@@ -6,11 +6,16 @@
  */
 
 #include "AccelerometerHandler.h"
+#include "AdcStreamHandler.h"
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 
 #include <RTOSIface/RTOSIface.h>
+#if SUPPORT_ADXL345
+#include <Hardware/ADXL345.h>
+#else
 #include <Hardware/LISAccelerometer.h>
+#endif
 #include <CanMessageFormats.h>
 #include <Platform/TaskPriorities.h>
 #include <Platform/Platform.h>
@@ -22,12 +27,19 @@
 
 #define TEST_PACKING	0
 
+#if SUPPORT_ADXL345
+constexpr uint16_t DefaultSamplingRate = 400;
+#else
 constexpr uint16_t DefaultSamplingRate = 1000;
-
-constexpr size_t AccelerometerTaskStackWords = 130;
+#endif
+constexpr size_t AccelerometerTaskStackWords = 150;
 static Task<AccelerometerTaskStackWords> *accelerometerTask;
 
+#if SUPPORT_ADXL345
+static ADXL345 *accelerometer = nullptr;
+#else
 static LISAccelerometer *accelerometer = nullptr;
+#endif
 static bool present = false;								// note that present => (accelerometer != nullptr)
 
 static uint16_t samplingRate = DefaultSamplingRate;
@@ -225,6 +237,8 @@ void AccelerometerHandler::Init(SharedI2CMaster& dev) noexcept
 {
 #if ACCELEROMETER_USES_SPI
 	accelerometer = new LISAccelerometer(dev, Lis3dhCsPin, Lis3dhInt1Pin);
+#elif SUPPORT_ADXL345
+	accelerometer = new ADXL345(dev, ADXL345Int1Pin);
 #else
 	accelerometer = new LISAccelerometer(dev, Lis3dhInt1Pin);
 #endif
@@ -252,6 +266,11 @@ bool AccelerometerHandler::IsPresent() noexcept
 	return present;
 }
 
+bool AccelerometerHandler::IsRunning() noexcept
+{
+	return running;
+}
+
 // Translate the orientation from a 2-digit number to translation tables, returning true if successful, false if bad orientation
 GCodeResult AccelerometerHandler::ProcessConfigRequest(const CanMessageGeneric& msg, const StringRef &reply) noexcept
 {
@@ -264,8 +283,14 @@ GCodeResult AccelerometerHandler::ProcessConfigRequest(const CanMessageGeneric& 
 	}
 	if (deviceNumber != 0 || !present)
 	{
+
+#if SUPPORT_ADCSTREAM
+		//if device number is greater 0 it is a AdcStream for e.g. BallSensor
+		return AdcStreamHandler::ProcessConfigRequest(msg, reply);
+#else
 		reply.printf("Accelerometer %u.%u not present", CanInterface::GetCanAddress(), deviceNumber);
 		return GCodeResult::error;
+#endif
 	}
 
 	if (running)
@@ -313,8 +338,14 @@ GCodeResult AccelerometerHandler::ProcessStartRequest(const CanMessageStartAccel
 {
 	if (msg.deviceNumber != 0 || !present)
 	{
+
+#if SUPPORT_ADCSTREAM
+		//if the device number is different to Zero, then and AdcStream will be established
+		return AdcStreamHandler::ProcessStartRequest(msg, reply);
+#else
 		reply.printf("Accelerometer %u.%u not present", CanInterface::GetCanAddress(), msg.deviceNumber);
 		return GCodeResult::error;
+#endif
 	}
 
 	if (running)

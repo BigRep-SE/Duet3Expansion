@@ -30,7 +30,7 @@
 # include <Hardware/SharedI2CMaster.h>
 #endif
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 # include <CommandProcessing/AccelerometerHandler.h>
 #endif
 
@@ -40,6 +40,10 @@
 
 #if SUPPORT_AS5601
 # include <CommandProcessing/MFMHandler.h>
+#endif
+
+#if SUPPORT_LED_STATES
+# include <LedStrips/States/LedHandler.h>
 #endif
 
 #if SUPPORT_CLOSED_LOOP
@@ -75,6 +79,15 @@ constexpr uint32_t FirmwareFlashStart = FLASH_ADDR + FlashBlockSize;	// we reser
 #else
 # error Unsupported processor
 #endif
+
+#if SUPPORT_I2C_SENSORS && SUPPORT_SHT31
+#include <Heating/Sensors/Sht31Sensor.h>
+#endif
+
+#if SUPPORT_I2C_SENSORS && SUPPORT_EEPROM_MEMORY
+#include <Movement/Memory/MovementMemoryHandler.h>
+#endif
+
 
 enum class DeferredCommand : uint8_t
 {
@@ -122,6 +135,10 @@ namespace Platform
 #if HAS_12V_MONITOR
 	static volatile uint16_t currentV12, highestV12, lowestV12;
 #endif
+#if HAS_48V_MONITOR
+	static volatile uint16_t currentV48, highestV48, lowestV48;
+#endif
+
 
 	static MinCurMax mcuTemperature;
 	static float mcuTemperatureAdjust = 0.0;
@@ -141,6 +158,9 @@ namespace Platform
 #endif
 #if HAS_12V_MONITOR
 	static AveragingFilter<VinReadingsAveraged> v12Filter;
+#endif
+#if HAS_48V_MONITOR
+	static AveragingFilter<VinReadingsAveraged> v48Filter;
 #endif
 
 #if SAME5x
@@ -176,6 +196,19 @@ namespace Platform
 	inline constexpr uint16_t V12VoltageToAdcReading(float voltage) noexcept
 	{
 		return (uint16_t)(voltage * ((1u << AnalogIn::AdcBits)/V12MonitorVoltageRange));
+	}
+
+#endif
+#if HAS_48V_MONITOR
+
+	inline constexpr float AdcReadingToV48Voltage(uint16_t adcVal) noexcept
+	{
+		return adcVal * (V48MonitorVoltageRange/(1u << AnalogIn::AdcBits));
+	}
+
+	inline constexpr uint16_t V48VoltageToAdcReading(float voltage) noexcept
+	{
+		return (uint16_t)(voltage * ((1u << AnalogIn::AdcBits)/V48MonitorVoltageRange));
 	}
 
 #endif
@@ -237,7 +270,7 @@ namespace Platform
 
 #if SAME5x
 		NVIC_SetPriority(StepTcIRQn, NvicPriorityStep);
-# if defined(EXP3HC)
+# if defined(EXP3HC) || defined(CB_MP) || defined(CB_SE) || defined(CB_SB)
 		NVIC_SetPriority(CAN1_IRQn, NvicPriorityCan);
 # elif defined(EXP1HCL) || defined(M23CL) || defined(TOOL1RR) || defined(F3PTB)
 		NVIC_SetPriority(CAN0_IRQn, NvicPriorityCan);
@@ -419,6 +452,20 @@ namespace Platform
 #if defined(EXP3HC)
 		const CanAddress switches = ReadBoardAddress();
 		return (switches == 0) ? CanId::Exp3HCFirmwareUpdateAddress : switches;
+#elif defined(CB_MP)
+		const CanAddress switches =  ReadBoardAddress();
+		CanAddress axisAddress = switches >> 1 ;  // 1: X ; 2: Y ; 3: Z ; 0: Other
+		const CanAddress positionAddress = switches & 0x01 ;
+		if(axisAddress == 0)
+		{
+			axisAddress = 4;
+		}
+		return (CanId::MotorBoardBaseAddress * axisAddress + positionAddress);
+#elif defined(CB_SB)
+		return (CanId::StageBoardBaseAddress);
+#elif defined(CB_SE)
+		const CanAddress switches =  ReadBoardAddress();
+		return (CanId::SmartExtruderBaseAddress + switches);
 #elif defined(TOOL1LC) || defined(TOOL1RR) || defined(F3PTB)
 		return CanId::ToolBoardDefaultAddress;
 #elif defined(SAMMYC21) || defined(RPI_PICO) || defined(FLY36RRF)
@@ -609,7 +656,7 @@ void Platform::Init()
 
 #if HAS_ADDRESS_SWITCHES
 	// Set up the board ID switch inputs
-	for (unsigned int i = 0; i < 4; ++i)
+	for (unsigned int i = 0; i < NumAddressBits; ++i)
 	{
 		IoPort::SetPinMode(BoardAddressPins[i], INPUT_PULLUP);
 	}
@@ -628,6 +675,15 @@ void Platform::Init()
 	IoPort::SetPinMode(V12MonitorPin, AIN);
 	AnalogIn::EnableChannel(PinToAdcChannel(V12MonitorPin), v12Filter.CallbackFeedIntoFilter, CallbackParameter(&v12Filter), 1);
 #endif
+#if HAS_48V_MONITOR
+	currentV48 = highestV48 = 0;
+	lowestV48 = 65535;
+
+	v48Filter.Init(0);
+	IoPort::SetPinMode(V48MonitorPin, AIN);
+	AnalogIn::EnableChannel(PinToAdcChannel(V48MonitorPin), v48Filter.CallbackFeedIntoFilter, CallbackParameter(&v48Filter), 1);
+#endif
+
 
 #if HAS_VREF_MONITOR
 	// Set up the Vref and Vssa filters
@@ -697,7 +753,7 @@ void Platform::Init()
 
 	InitialiseInterrupts();
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 # ifdef TOOL1LC
 	if (boardVariant != 0)
 # endif
@@ -723,6 +779,18 @@ void Platform::Init()
 	MFMHandler::Init(*sharedI2C);
 #endif
 
+#if SUPPORT_I2C_SENSORS && SUPPORT_SHT31
+	Sht31Sensor::GetInstance().Init();
+#endif
+
+#if SUPPORT_I2C_SENSORS && SUPPORT_EEPROM_MEMORY
+	MovementMemoryHandler::Init();
+#endif
+
+#if SUPPORT_LED_STATES
+	LedHandler::Init();
+#endif
+
 	CanInterface::Init(GetCanAddress(), UseAlternateCanPins, true);
 	lastPollTime = millis();
 }
@@ -741,7 +809,7 @@ void Platform::InitMinimal()
 
 void Platform::Spin()
 {
-#if HAS_VOLTAGE_MONITOR || HAS_12V_MONITOR
+#if HAS_VOLTAGE_MONITOR || HAS_12V_MONITOR || HAS_48V_MONITOR
 	static bool powered = false;
 #endif
 
@@ -828,8 +896,31 @@ void Platform::Spin()
 		powered = false;
 		++numUnderVoltageEvents;
 	}
-#elif HAS_VOLTAGE_MONITOR
+#elif HAS_48V_MONITOR
+	currentV48 = v48Filter.GetSum()/v48Filter.NumAveraged();
+	if (v48Filter.IsValid())
+	{
+		if (currentV48 < lowestV48)
+		{
+			lowestV48 = currentV48;
+		}
+		if (currentV48 > highestV48)
+		{
+			highestV48 = currentV48;
+		}
+	}
 
+	const float volts48 = (currentV48 * V48MonitorVoltageRange)/(1u << AnalogIn::AdcBits);
+	if (!powered && voltsVin >= 10.5 && volts48 >= 20.5)
+	{
+		powered = true;
+	}
+	else if (powered && (voltsVin < 10.0 || volts48 < 20.0))
+	{
+		powered = false;
+		++numUnderVoltageEvents;
+	}
+#elif HAS_VOLTAGE_MONITOR
 	if (!powered && voltsVin >= 10.5)
 	{
 		powered = true;
@@ -863,6 +954,10 @@ void Platform::Spin()
 					? (StepTimer::GetMasterTime() & (1u << 19)) != 0
 						: (StepTimer::GetTimerTicks() & (1u << 17)) != 0
 		    );
+#if !SUPPORT_ACT_LED_ON_CAN_MESSAGE
+	// When it is not sync, we turn the ACT LED when STATUS LED is OFF
+	WriteLed(1,	!(StepTimer::IsSynced()) ? ((StepTimer::GetTimerTicks() & (1u << 17)) == 0) : false );
+#endif
 
 	if (now - lastPollTime > 2000)
 	{
@@ -934,6 +1029,8 @@ void Platform::Spin()
 						"Addr %u"
 #if HAS_12V_MONITOR
 						" %.1fV %.1fV"
+#elif HAS_48V_MONITOR
+						" %.1fV %.1fV"
 #elif HAS_VOLTAGE_MONITOR
 						" %.1fV"
 #endif
@@ -951,6 +1048,8 @@ void Platform::Spin()
 						(unsigned int)CanInterface::GetCanAddress(),
 #if HAS_12V_MONITOR
 						(double)voltsVin, (double)volts12,
+#elif HAS_48V_MONITOR
+						(double)voltsVin, (double)volts48,
 #elif HAS_VOLTAGE_MONITOR
 						(double)voltsVin,
 #endif
@@ -1009,7 +1108,7 @@ void Platform::Spin()
 # endif
 
 			//moveInstance->DebugPrintCdda();
-# if SUPPORT_LIS3DH
+# if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 			debugPrintf("Accelerometer detected: %s", AccelerometerHandler::IsPresent() ? "yes" : "no");
 # endif
 		}
@@ -1019,10 +1118,12 @@ void Platform::Spin()
 
 void Platform::SpinMinimal()
 {
+#if SUPPORT_ACT_LED_ON_CAN_MESSAGE
 	if (millis() - whenLastCanMessageProcessed > ActLedFlashTime)
 	{
 		WriteLed(1, false);
 	}
+#endif
 
 #if HAS_VOLTAGE_MONITOR
 	// Get the VIN voltage
@@ -1150,12 +1251,31 @@ bool Platform::Debug(Module module)
 #endif
 }
 
+# if HAS_SMART_DRIVERS
+#if SUPPORT_TMC_RESULT
+uint32_t Platform::GetTmcDriversResultMax(size_t driver)
+{
+	return SmartDrivers::GetMaxResultValueAndClear(driver);
+}
+
+uint32_t Platform::GetTmcDriversResultMin(size_t driver)
+{
+	return SmartDrivers::GetMinResultValueAndClear(driver);
+}
+
+uint32_t Platform::GetTmcDriversResultAvg(size_t driver)
+{
+	return SmartDrivers::GetAvgResultValueAndClear(driver);
+}
+#endif // SUPPORT_TMC_RESULT
+#endif // HAS_SMART_DRIVERS
+
 #if HAS_ADDRESS_SWITCHES
 
 uint8_t Platform::ReadBoardAddress()
 {
 	uint8_t rslt = 0;
-	for (unsigned int i = 0; i < 4; ++i)
+	for (unsigned int i = 0; i < NumAddressBits; ++i)
 	{
 		if (!digitalRead(BoardAddressPins[i]))
 		{
@@ -1206,7 +1326,9 @@ void Platform::EmergencyStop()
 void Platform::OnProcessingCanMessage()
 {
 	whenLastCanMessageProcessed = millis();
+#if SUPPORT_ACT_LED_ON_CAN_MESSAGE
 	WriteLed(1, true);				// turn the ACT LED on
+#endif
 }
 
 GCodeResult Platform::DoDiagnosticTest(const CanMessageDiagnosticTest& msg, const StringRef& reply)
@@ -1373,9 +1495,15 @@ void Platform::SetInterruptPriority(IRQn base, unsigned int num, uint32_t prio)
 MinCurMax Platform::GetPowerVoltages(bool resetMinMax) noexcept
 {
 	MinCurMax result;
+#ifdef CB_SB_06
+	result.minimum = 24.0f;
+	result.current = 24.0f;
+	result.maximum = 24.0f;
+#else
 	result.minimum = AdcReadingToVinVoltage(lowestVin);
 	result.current = AdcReadingToVinVoltage(currentVin);
 	result.maximum = AdcReadingToVinVoltage(highestVin);
+#endif
 	if (resetMinMax)
 	{
 		lowestVin = highestVin = currentVin;
@@ -1385,7 +1513,11 @@ MinCurMax Platform::GetPowerVoltages(bool resetMinMax) noexcept
 
 float Platform::GetCurrentVinVoltage() noexcept
 {
+#ifdef CB_SB
+	return 24.0f;
+#else
 	return AdcReadingToVinVoltage(currentVin);
+#endif
 }
 
 #endif
@@ -1412,6 +1544,29 @@ float Platform::GetCurrentV12Voltage() noexcept
 
 #endif
 
+#if HAS_48V_MONITOR
+
+MinCurMax Platform::GetV48Voltages(bool resetMinMax) noexcept
+{
+	MinCurMax result;
+	result.minimum = AdcReadingToV48Voltage(lowestV48);
+	result.current = AdcReadingToV48Voltage(currentV48);
+	result.maximum = AdcReadingToV48Voltage(highestV48);
+	if (resetMinMax)
+	{
+		lowestV48 = highestV48 = currentV48;
+	}
+	return result;
+}
+
+float Platform::GetCurrentV48Voltage() noexcept
+{
+	return AdcReadingToV48Voltage(currentV48);
+}
+
+#endif
+
+
 void Platform::AppendBoardAndFirmwareDetails(const StringRef& reply) noexcept
 {
 	// This must be formatted in a specific way for the ATE
@@ -1426,6 +1581,9 @@ void Platform::AppendBoardAndFirmwareDetails(const StringRef& reply) noexcept
 #elif defined(EXP3HC)
 	reply.lcatf("Duet " BOARD_TYPE_NAME " rev %s firmware version " VERSION " (%s%s)",
 				(boardVariant == 1) ? "1.02 or later" : "1.01 or earlier",
+				IsoDate, TIME_SUFFIX);
+#elif defined(CB_MP)|| defined(CB_SE) || defined(CD_SB)
+	reply.lcatf("BigRep " BOARD_TYPE_NAME " firmware version " VERSION " (%s%s)",
 				IsoDate, TIME_SUFFIX);
 #else
 	reply.lcatf("Duet " BOARD_TYPE_NAME " firmware version " VERSION " (%s%s)",

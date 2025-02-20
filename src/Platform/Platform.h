@@ -24,7 +24,11 @@
 
 #if SUPPORT_I2C_SENSORS
 # include <Hardware/SharedI2CMaster.h>
-# include <Hardware/LISAccelerometer.h>
+# if SUPPORT_ADXL345
+# 	include <Hardware/ADXL345.h>
+# elif SUPPORT_LIS3DH
+# 	include <Hardware/LISAccelerometer.h>
+# endif
 #endif
 
 #if RP2040
@@ -123,6 +127,14 @@ namespace Platform
 	bool Debug(Module module);
 	void WriteLed(uint8_t ledNumber, bool turnOn);
 
+# if HAS_SMART_DRIVERS
+#if SUPPORT_TMC_RESULT
+	uint32_t GetTmcDriversResultMax(size_t driver);
+	uint32_t GetTmcDriversResultMin(size_t driver);
+	uint32_t GetTmcDriversResultAvg(size_t driver);
+#endif // SUPPORT_TMC_RESULT
+#endif // HAS_SMART_DRIVERS
+
 #if USE_SERIAL_DEBUG
 	bool DebugPutc(char c);
 #endif
@@ -176,6 +188,11 @@ namespace Platform
 	MinCurMax GetV12Voltages(bool resetMinMax) noexcept;
 	float GetCurrentV12Voltage() noexcept;
 #endif
+#if HAS_48V_MONITOR
+	MinCurMax GetV48Voltages(bool resetMinMax) noexcept;
+	float GetCurrentV48Voltage() noexcept;
+#endif
+
 
 	inline uint32_t GetDateTime() noexcept { return realTime; }
 	inline void SetDateTime(uint32_t tim) noexcept { realTime = tim; }

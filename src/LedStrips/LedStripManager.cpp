@@ -17,6 +17,10 @@ namespace LedStripManager
 	ReadWriteLock ledLock;
 	LedStripBase *strips[MaxLedStrips] = { 0 };
 }
+#elif SUPPORT_LED_STATES
+// TODO: Use the base class instead.
+# include <CAN/CanInterface.h>
+# include "States/LedHandler.h"
 #endif
 
 // Configure an LED strip. If success and the strip does not require motion to be paused when sending data to the strip, set bit 0 of 'extra'.
@@ -80,6 +84,9 @@ GCodeResult LedStripManager::HandleM950Led(const CanMessageGeneric &msg, const S
 		rslt = slot->Configure(parser, reply, extra);
 	}
 	return rslt;
+#elif SUPPORT_LED_STATES
+	CanMessageGenericParser parser(msg, M950LedParams);
+	return LedHandler::HandleM950(parser, reply);
 #else
 	reply.copy("LED strips not supported by this expansion board");
 	return GCodeResult::error;
@@ -110,6 +117,9 @@ GCodeResult LedStripManager::HandleLedSetColours(const CanMessageGeneric &msg, c
 
 	reply.printf("Board %u does not have LED strip #%u", CanInterface::GetCanAddress(), stripNumber);
 	return GCodeResult::error;
+#elif SUPPORT_LED_STATES
+	CanMessageGenericParser parser(msg, M150Params);
+	return LedHandler::HandleM150(parser, reply);
 #else
 	reply.copy("LED strips not supported by this expansion board");
 	return GCodeResult::error;

@@ -40,6 +40,9 @@
 #define TMC22xx_SINGLE_UART		(TMC22xx_SINGLE_DRIVER || TMC22xx_HAS_MUX || TMC22xx_USE_SLAVEADDR)
 
 #define RESET_MICROSTEP_COUNTERS_AT_INIT	0		// Duets use pulldown resistors on the step pins, so we don't get phantom microsteps at power up
+#if SAME5x
+#define USE_FAST_CRC	1
+#endif
 
 #include <RTOSIface/RTOSIface.h>
 #include <Platform/TaskPriorities.h>
@@ -576,6 +579,13 @@ public:
 	StandardDriverStatus GetStatus(bool accumulated, bool clearAccumulated) noexcept;
 	bool UpdatePending() const noexcept;
 
+#if SUPPORT_TMC_RESULT
+	uint32_t GetMinResultValueAndClear() noexcept;
+	uint32_t GetMaxResultValueAndClear() noexcept;
+	uint32_t GetAvgResultValueAndClear() noexcept;
+#endif
+
+
 #if TMC22xx_HAS_ENABLE_PINS
 	bool UsesGlobalEnable() const noexcept { return enablePin == NoPin; }
 #endif
@@ -734,6 +744,13 @@ private:
 
 #if HAS_STALL_DETECT
 	uint16_t minSgLoadRegister;								// the minimum value of the StallGuard bits we read
+#endif
+
+#if SUPPORT_TMC_RESULT
+	volatile uint32_t minSgLoadRegisterSensor = 1023;		// the minimum value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t maxSgLoadRegisterSensor = 0;			// the maximum value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t accumSgLoadRegisterSensor = 0;		// Accum. value of the StallGuard bits we read (For the sensor)
+	volatile uint32_t accumCounterSgLoadRegisterSensor = 0;	// Accum. counter value of the StallGuard bits we read (For the sensor)
 #endif
 
 	uint8_t axisNumber;										// the axis number of this driver as used to index the DriveMovements in the DDA
@@ -1815,6 +1832,19 @@ inline void TmcDriverState::TransferDone() noexcept
 				{
 					minSgLoadRegister = sgResult;
 				}
+#if SUPPORT_TMC_RESULT
+				++accumCounterSgLoadRegisterSensor;
+				accumSgLoadRegisterSensor += (uint32_t)sgResult;
+				if ( (uint32_t)sgResult < minSgLoadRegisterSensor)
+				{
+					minSgLoadRegisterSensor = (uint32_t)sgResult;
+				}
+				if ( (uint32_t)sgResult > maxSgLoadRegisterSensor)
+				{
+					maxSgLoadRegisterSensor = (uint32_t)sgResult;
+				}
+#endif
+
 			}
 #endif
 			readRegisters[registerToRead] = regVal;
@@ -1890,7 +1920,7 @@ inline void TmcDriverState::SetUartMux() noexcept
 
 #endif
 
-#if RP2040
+#if RP2040 || (TMC22xx_SINGLE_UART && TMC22xx_USES_SERCOM)
 void TransferCompleteCallback(CallbackParameter, DmaCallbackReason reason) noexcept;		// forward declaration
 #endif
 
@@ -2628,6 +2658,52 @@ uint32_t SmartDrivers::GetDriverClockFrequency() noexcept
 	return NominalTmcClockSpeed;
 }
 
+#if SUPPORT_TMC_RESULT
+
+uint32_t TmcDriverState::GetMinResultValueAndClear() noexcept
+{
+//	TaskCriticalSectionLocker lock;
+	uint32_t ret = minSgLoadRegisterSensor;
+	minSgLoadRegisterSensor = 1023;
+	return ret;
+}
+uint32_t TmcDriverState::GetMaxResultValueAndClear() noexcept
+{
+//	TaskCriticalSectionLocker lock;
+	uint32_t ret = maxSgLoadRegisterSensor;
+	maxSgLoadRegisterSensor = 0;
+	return ret;
+
+}
+uint32_t TmcDriverState::GetAvgResultValueAndClear() noexcept
+{
+	//TaskCriticalSectionLocker lock;
+	if(accumCounterSgLoadRegisterSensor)
+	{
+		uint32_t ret = accumSgLoadRegisterSensor / accumCounterSgLoadRegisterSensor;
+		accumSgLoadRegisterSensor = 0;
+		accumCounterSgLoadRegisterSensor = 0;
+		return ret;
+	}
+	return 0;
+}
+
+uint32_t SmartDrivers::GetMinResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetMinResultValueAndClear();
+}
+
+uint32_t SmartDrivers::GetMaxResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetMaxResultValueAndClear();
+}
+
+uint32_t SmartDrivers::GetAvgResultValueAndClear(size_t driver) noexcept
+{
+	return driverStates[driver].GetAvgResultValueAndClear();
+}
+
+#endif // SUPPORT_TMC_RESULT
 #if SUPPORT_TMC2240 && !(SUPPORT_TMC2208 || SUPPORT_TMC2209)
 
 float SmartDrivers::GetDriverTemperature(size_t driver) noexcept

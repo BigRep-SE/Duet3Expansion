@@ -38,7 +38,7 @@ Licence: GPL
 # include "Sensors/DhtSensor.h"
 #endif
 
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 # include <CommandProcessing/AccelerometerHandler.h>
 #endif
 
@@ -393,11 +393,16 @@ void Heat::Exit() noexcept
 				boardStatusMsg->values[index++] = Platform::GetV12Voltages(false);
 				boardStatusMsg->hasV12 = true;
 #endif
+#if HAS_48V_MONITOR
+				boardStatusMsg->values[index++] = Platform::GetV48Voltages(false);
+				boardStatusMsg->hasV48 = true;
+#endif
+
 #if HAS_CPU_TEMP_SENSOR
 				boardStatusMsg->values[index++] = Platform::GetMcuTemperatures();
 				boardStatusMsg->hasMcuTemp = true;
 #endif
-#if SUPPORT_LIS3DH
+#if (SUPPORT_LIS3DH || SUPPORT_ADXL345)
 				boardStatusMsg->hasAccelerometer = AccelerometerHandler::IsPresent();
 #endif
 #if SUPPORT_CLOSED_LOOP

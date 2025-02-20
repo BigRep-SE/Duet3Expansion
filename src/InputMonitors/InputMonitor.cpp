@@ -20,6 +20,11 @@
 # include <CommandProcessing/MFMHandler.h>
 #endif
 
+#if SUPPORT_ANALOG_THRESHOLD
+# include <Platform/Platform.h>
+#endif
+
+
 InputMonitor * volatile InputMonitor::monitorsList = nullptr;
 InputMonitor * volatile InputMonitor::freeList = nullptr;
 ReadWriteLock InputMonitor::listLock;
@@ -48,6 +53,17 @@ bool InputMonitor::Activate() noexcept
 		}
 		else
 		{
+#if SUPPORT_ANALOG_THRESHOLD
+			if(adcFilterChannel < 0) { // Normal analog port
+				state = port.ReadAnalog() >= threshold;
+				ok = port.SetAnalogCallback(CommonAnalogPortInterrupt, CallbackParameter(this), 1);
+			}
+			else {
+				ThermistorAveragingFilter * filter = Platform::GetAdcFilter(adcFilterChannel);
+				state = port.GetTotalInvert() ? (filter->GetLatestReading() <= threshold) : (filter->GetLatestReading() >= threshold) ;
+				ok = filter->SetCallbackFiltered( CommonAnalogFilteredInterrupt, CallbackParameter(this) );
+			}
+#else
 			// Analog port
 			state = port.ReadAnalog() >= threshold;
 #ifdef ATEIO
@@ -61,6 +77,7 @@ bool InputMonitor::Activate() noexcept
 			{
 				ok = port.SetAnalogCallback(CommonAnalogPortInterrupt, CallbackParameter(this), 1);
 			}
+#endif
 		}
 		active = true;
 
@@ -133,6 +150,23 @@ void InputMonitor::DigitalInterrupt() noexcept
 		}
 	}
 }
+
+#if SUPPORT_ANALOG_THRESHOLD
+/* static */ void InputMonitor::CommonAnalogFilteredInterrupt(CallbackParameter cbp, uint32_t reading) noexcept{
+	static_cast<InputMonitor*>(cbp.vp)->AnalogFilteredInterrupt(reading);
+}
+
+void InputMonitor::AnalogFilteredInterrupt(uint32_t reading) noexcept {
+	const bool newState = port.GetTotalInvert() ? (reading <= threshold) : (reading >= threshold) ;
+	if (newState != state) {
+		state = newState;
+		if (active)	{
+			sendDue = true;
+			CanInterface::WakeAsyncSender();
+		}
+	}
+}
+#endif
 
 void InputMonitor::AnalogInterrupt(uint32_t reading) noexcept
 {
@@ -251,7 +285,25 @@ void InputMonitor::UpdateState(bool newState) noexcept
 	newMonitor->sendDue = false;
 	String<StringLength50> pinName;
 	pinName.copy(msg.pinName, msg.GetMaxPinNameLength(dataLength));
+#if SUPPORT_ANALOG_THRESHOLD
+	const PinAccess accessType = (msg.threshold == 0) ? PinAccess::read : PinAccess::readAnalog;
+	bool allocated = newMonitor->port.AssignPort(pinName.c_str(), reply, PinUsedBy::endstop, accessType);
+	if( !allocated && (accessType == PinAccess::readAnalog) ) {
+		reply.Clear();
+		allocated = newMonitor->port.AssignPort(pinName.c_str(), reply, PinUsedBy::endstop, PinAccess::readAnalogShared);
+		if(allocated){
+			newMonitor->adcFilterChannel = Platform::GetAveragingFilterIndex(newMonitor->port);
+			if( newMonitor->adcFilterChannel < 0 )
+			{
+				reply.printf("Failed to get the ADC filter");
+				allocated = false;
+			}
+		}
+	}
+	if( allocated )
+#else
 	if (newMonitor->port.AssignPort(pinName.c_str(), reply, PinUsedBy::endstop, (msg.threshold == 0) ? PinAccess::read : PinAccess::readAnalog))
+#endif
 	{
 		newMonitor->next = monitorsList;
 		monitorsList = newMonitor;

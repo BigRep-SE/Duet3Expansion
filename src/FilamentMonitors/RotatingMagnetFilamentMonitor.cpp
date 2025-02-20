@@ -14,6 +14,15 @@
 #include <CanMessageFormats.h>
 #include <CanMessageGenericParser.h>
 
+#if SUPPORT_FILAMENT_SENSOR
+// TODO: proper implementation
+volatile float 	sensorMonitorValue = 0;				// Used to report the last value.
+volatile int32_t sensorMonitorAccum = 0;			// Used to accumulate the rotations.
+volatile float   checkedRatioValue {0.0f};			// Used to know the last checked ratio value
+volatile float   commandedValue {0.0f};				// Used to know the last checked ratio value
+volatile float   measuredValue {0.0f};				// Used to know the last checked ratio value
+#endif
+
 #if SUPPORT_AS5601
 # include <CommandProcessing/MFMHandler.h>
 #endif
@@ -207,6 +216,12 @@ GCodeResult RotatingMagnetFilamentMonitor::Configure(const CanMessageGenericPars
 	return rslt;
 }
 
+// Return the current wheel angle
+float RotatingMagnetFilamentMonitor::GetCurrentPosition() const noexcept
+{
+	return (sensorValue & TypeMagnetAngleMask) * (360.0/1024.0);
+}
+
 // Deal with any received data
 void RotatingMagnetFilamentMonitor::HandleIncomingData() noexcept
 {
@@ -321,6 +336,14 @@ void RotatingMagnetFilamentMonitor::HandleIncomingData() noexcept
 			const uint16_t angleChange = (val - sensorValue) & TypeMagnetAngleMask;			// angle change in range 0..1023
 			const int32_t movement = (angleChange <= 512) ? (int32_t)angleChange : (int32_t)angleChange - 1024;
 			movementMeasuredSinceLastSync += (float)movement/1024;
+
+#if SUPPORT_FILAMENT_SENSOR
+			sensorMonitorValue += (float)movement / 1024.0f;
+			sensorMonitorAccum += movement;
+			measuredValue +=  (float)movement / 1024.0f;
+			commandedValue += extrusionCommandedAtCandidateStartBit;
+#endif
+
 			sensorValue = val;
 			lastMeasurementTime = millis();
 
@@ -481,6 +504,9 @@ FilamentSensorStatus RotatingMagnetFilamentMonitor::CheckFilament(float amountCo
 		magneticMonitorState = MagneticMonitorState::calibrating;
 		totalExtrusionCommanded = amountCommanded;
 		totalMovementMeasured = amountMeasured;
+#if SUPPORT_FILAMENT_SENSOR
+		checkedRatioValue = totalMovementMeasured/totalExtrusionCommanded;
+#endif
 		break;
 
 	case MagneticMonitorState::calibrating:
@@ -494,6 +520,9 @@ FilamentSensorStatus RotatingMagnetFilamentMonitor::CheckFilament(float amountCo
 				totalMovementMeasured = -totalMovementMeasured;
 			}
 			float ratio = totalMovementMeasured/totalExtrusionCommanded;
+#if SUPPORT_FILAMENT_SENSOR
+			checkedRatioValue = ratio;
+#endif
 			minMovementRatio = maxMovementRatio = ratio;
 			lastMovementRatio = ratio * mmPerRev;
 			magneticMonitorState = MagneticMonitorState::comparing;
@@ -516,6 +545,9 @@ FilamentSensorStatus RotatingMagnetFilamentMonitor::CheckFilament(float amountCo
 			}
 			totalMovementMeasured += amountMeasured;
 			const float ratio = amountMeasured/amountCommanded;
+#if SUPPORT_FILAMENT_SENSOR
+			checkedRatioValue = ratio;
+#endif
 			if (ratio > maxMovementRatio)
 			{
 				maxMovementRatio = ratio;
@@ -638,6 +670,122 @@ void RotatingMagnetFilamentMonitor::Diagnostics(const StringRef& reply) noexcept
 					framingErrorCount, parityErrorCount, overrunErrorCount, polarityErrorCount, overdueCount);
 	}
 }
+
+#if SUPPORT_FILAMENT_SENSOR
+
+// FilamentSensor
+// Sensor type descriptors
+TemperatureSensor::SensorTypeDescriptor FilamentSensor::typeDescriptor(TypeName, [](unsigned int sensorNum) noexcept -> TemperatureSensor *_ecv_from { return new FilamentSensor(sensorNum); } );
+
+GCodeResult FilamentSensor::Configure(const CanMessageGenericParser& parser, const StringRef& reply)
+{
+	float _scale;
+	bool changed = false;
+	FilteredSensor::ConfigureFilter(parser, changed);
+	if (parser.GetFloatParam('B', _scale)) {
+		scale = _scale;
+		changed = true;
+	}
+	if(!changed) {
+		CopyBasicDetails(reply);
+		if( GetK() < MaxK )
+		{
+			reply.catf(", filtered, C = %.3f, B = %.1f", (double)GetK(), (double)scale);
+		}
+		else
+		{
+			reply.catf(", unfiltered, B = %.1f", (double)scale);
+		}
+	}
+	return GCodeResult::ok;
+}
+
+void FilamentSensor::Poll() {
+	float avgValue = 0;
+	const TimeMs CurrentTimeMs = millis();
+	const float TimeSinceLastPollSec = ((float)(CurrentTimeMs - lastPollTimeMs)) / 1000.0f  ;
+	if(TimeSinceLastPollSec > 0.0f) {
+		avgValue = scale *  FilterValue( -360.0f * sensorMonitorValue / TimeSinceLastPollSec );
+		sensorMonitorValue = 0; // Clear.
+		lastPollTimeMs = CurrentTimeMs;	// Update the last poll time.
+	}
+	SetResult(avgValue, TemperatureError::ok);
+}
+
+// FilamentRatioSensor
+// Sensor type descriptors
+TemperatureSensor::SensorTypeDescriptor FilamentRatioSensor::typeDescriptor(TypeName, [](unsigned int sensorNum) noexcept -> TemperatureSensor *_ecv_from { return new FilamentRatioSensor(sensorNum); } );
+
+GCodeResult FilamentRatioSensor::Configure(const CanMessageGenericParser& parser, const StringRef& reply)
+{
+	float _scale;
+	bool changed = false;
+	FilteredSensor::ConfigureFilter(parser, changed);
+	if (parser.GetFloatParam('B', _scale)) {
+		scale = _scale;
+		changed = true;
+	}
+	if(!changed) {
+		CopyBasicDetails(reply);
+		if( GetK() < MaxK )
+		{
+			reply.catf(", filtered, C = %.3f, B = %.1f", (double)GetK(), (double)scale);
+		}
+		else
+		{
+			reply.catf(", unfiltered, B = %.1f", (double)scale);
+		}
+	}
+	return GCodeResult::ok;
+}
+
+void FilamentRatioSensor::Poll() {
+	float avgValue = 0;
+	const TimeMs CurrentTimeMs = millis();
+	const float TimeSinceLastPollSec = ((float)(CurrentTimeMs - lastPollTimeMs)) / 1000.0f  ;
+	if(TimeSinceLastPollSec > 0.0f) {
+		if( commandedValue >= 0.01f ){
+			const float ratio = measuredValue / commandedValue;
+			avgValue = scale *  FilterValue(-360.0f * ratio / TimeSinceLastPollSec);
+			commandedValue = 0;
+			measuredValue = 0;
+			// avgValue = scale *  FilterValue(-360.0f * checkedRatioValue / TimeSinceLastPollSec);
+		}
+		else{
+			avgValue = scale *  FilterValue( 0 );
+		}
+		// sensorMonitorValue = 0; // Clear.
+		lastPollTimeMs = CurrentTimeMs;	// Update the last poll time.
+	}
+	SetResult(avgValue, TemperatureError::ok);
+}
+
+// TotalFilamentSensor
+// Sensor type descriptors
+TemperatureSensor::SensorTypeDescriptor TotalFilamentSensor::typeDescriptor(TypeName, [](unsigned int sensorNum) noexcept -> TemperatureSensor *_ecv_from { return new TotalFilamentSensor(sensorNum); } );
+
+GCodeResult TotalFilamentSensor::Configure(const CanMessageGenericParser& parser, const StringRef& reply)
+{
+	float _scale;
+	bool changed = false;
+	if (parser.GetFloatParam('B', _scale)) {
+		scale = _scale;
+		changed = true;
+	}
+	if(!changed) {
+		CopyBasicDetails(reply);
+		reply.catf(", B = %.1f", (double)scale);
+		sensorMonitorAccum = 0;
+	}
+	return GCodeResult::ok;
+}
+
+void TotalFilamentSensor::Poll() {
+	const TimeMs CurrentTimeMs = millis();
+	lastPollTimeMs = CurrentTimeMs;	// Update the last poll time.
+	SetResult( ( -360.0f * scale *  (float) sensorMonitorAccum ) / 1024.0f, TemperatureError::ok);
+}
+#endif // SUPPORT_FILAMENT_SENSOR
 
 #endif	// SUPPORT_DRIVERS
 

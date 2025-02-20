@@ -67,6 +67,13 @@ namespace SmartDrivers
 	extern std::atomic<uint16_t> driverStallsToNotify;
 #endif
 
+
+#if SUPPORT_TMC_RESULT
+	uint32_t GetMinResultValueAndClear(size_t driver) noexcept;
+	uint32_t GetMaxResultValueAndClear(size_t driver) noexcept;
+	uint32_t GetAvgResultValueAndClear(size_t driver) noexcept;
+#endif
+
 #if SUPPORT_TMC2240 && !(SUPPORT_TMC2208 || SUPPORT_TMC2209)
 	float GetDriverTemperature(size_t driver) noexcept;
 #endif

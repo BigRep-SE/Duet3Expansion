@@ -307,6 +307,11 @@ bool IoPort::Allocate(const char *pn, const StringRef& reply, PinUsedBy neededFo
 		{
 			portUsedBy[lp] = neededFor;
 		}
+#if SUPPORT_ANALOG_THRESHOLD
+		else if (portUsedBy[lp] == PinUsedBy::sensor && access == PinAccess::readAnalogShared){
+			doSetMode = false;
+		}
+#endif
 		else
 		{
 			const PinMode pm = (PinMode)logicalPinModes[lp];
@@ -321,7 +326,11 @@ bool IoPort::Allocate(const char *pn, const StringRef& reply, PinUsedBy neededFo
 		}
 		pin = lp;
 		hardwareInvert = hwInvert;
+#if SUPPORT_ANALOG_THRESHOLD
+		isSharedInput = (neededFor == PinUsedBy::temporaryInput) || (access == PinAccess::readAnalogShared);
+#else
 		isSharedInput = (neededFor == PinUsedBy::temporaryInput);
+#endif
 		SetInvert(inverted);
 
 		if (pullupAlways && access == PinAccess::read)

@@ -12,6 +12,8 @@ unsigned int AppGetXoscFrequency() noexcept
 {
 #ifdef EXP3HC
 	return 0;		// auto detect 12 or 25MHz
+#elif  defined(CB_MP) || defined(CB_SE) || defined(CB_SB)
+	return 12;
 #else
 	return 25;		// other boards (only EXP1HCL at present) always use 25MHz
 #endif

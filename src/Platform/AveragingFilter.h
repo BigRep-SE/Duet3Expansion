@@ -16,9 +16,19 @@
 template<size_t numAveraged> class AveragingFilter
 {
 public:
+#if SUPPORT_ANALOG_THRESHOLD
+	typedef void (*FilteredCallbackFunction)(CallbackParameter,uint32_t);
+	constexpr inline static size_t MAX_CALLBACKS = 2;
+#endif
+
 	AveragingFilter() noexcept
 	{
 		Init(0);
+#ifdef SUPPORT_ADCSTREAM
+		for(auto &callback : filteredCallbacks){
+			callback = nullptr;
+		}
+#endif
 	}
 
 	void Init(uint16_t val) volatile noexcept
@@ -28,6 +38,10 @@ public:
 		sum = (uint32_t)val * (uint32_t)numAveraged;
 		index = 0;
 		isValid = false;
+#ifdef SUPPORT_ADCSTREAM
+		tail = 0;
+		size = 0;
+#endif
 		for (size_t i = 0; i < numAveraged; ++i)
 		{
 			readings[i] = val;
@@ -37,17 +51,60 @@ public:
 	// Call this to put a new reading into the filter
 	void ProcessReading(uint16_t r) noexcept
 	{
-		TaskCriticalSectionLocker lock;
-
-		sum = sum - readings[index] + r;
-		readings[index] = r;
-		++index;
-		if (index == numAveraged)
+#if SUPPORT_ANALOG_THRESHOLD
+		uint32_t value;
+		bool toCall = false;
+#endif
 		{
-			index = 0;
-			isValid = true;
+			TaskCriticalSectionLocker lock;
+			sum = sum - readings[index] + r;
+			readings[index] = r;
+
+#ifdef SUPPORT_ADCSTREAM
+			// if new values are available, move the reading index forward
+			if (index == tail) {
+				tail = (tail + 1) % numAveraged;
+			}
+			if (size < numAveraged) {
+				++size;
+			}
+#endif
+
+			++index;
+			if (index == numAveraged)
+			{
+				index = 0;
+				isValid = true;
+#if SUPPORT_ANALOG_THRESHOLD
+				value = sum/numAveraged;
+				toCall = true;
+			}
+		}
+		if( toCall ) {
+			for(size_t i = 0; i < MAX_CALLBACKS ; ++i ) {
+				if(filteredCallbacks[i]) {
+					filteredCallbacks[i](filteredParameters[i],value);
+				}
+#endif
+			}
 		}
 	}
+
+#ifdef SUPPORT_ADCSTREAM
+	// Return a single value from the end of the queue
+	size_t GetValues(uint16_t &value) noexcept
+	{
+		TaskCriticalSectionLocker lock;
+
+		if (size > 0) {
+			value = readings[tail]+0x8000;
+			tail = (tail + 1) % numAveraged;
+			--size;
+			return true; 
+		}
+		return false; // no more values to read - the buffer has been completely read
+	}
+#endif
 
 	// Return the raw sum
 	uint32_t GetSum() const volatile noexcept
@@ -69,6 +126,20 @@ public:
 		return readings[indexOfLastReading];
 	}
 
+#if SUPPORT_ANALOG_THRESHOLD
+	bool SetCallbackFiltered( FilteredCallbackFunction fn, CallbackParameter param ) {
+		// Saving the callbacks
+		for(size_t i = 0; i < MAX_CALLBACKS ; ++i) {
+			if(filteredCallbacks[i] == nullptr || filteredCallbacks[i] == fn) {
+				filteredParameters[i] = param;
+				filteredCallbacks[i]  = fn;
+				return true;
+			}
+		}
+		return false;
+	}
+#endif
+
 	static constexpr size_t NumAveraged() noexcept { return numAveraged; }
 
 	// Function used as an ADC callback to feed a result into an averaging filter
@@ -81,6 +152,17 @@ private:
 	size_t index;
 	uint32_t sum;
 	bool isValid;
+
+#ifdef SUPPORT_ADCSTREAM
+	size_t tail;  // index of the next oldest value to read
+	size_t size;  // number of values to read
+#endif	
+
+#if SUPPORT_ANALOG_THRESHOLD
+	FilteredCallbackFunction filteredCallbacks[MAX_CALLBACKS];
+	CallbackParameter filteredParameters[MAX_CALLBACKS];
+#endif
+
 	//invariant(sum == + over readings)
 	//invariant(index < numAveraged)
 };
